@@ -105,6 +105,8 @@ type managerImpl struct {
 	thresholdsLastUpdated time.Time
 	// whether can support local storage capacity isolation
 	localStorageCapacityIsolation bool
+	// set of pods (format: namespace/pod: bool) that we have already tried to evict
+	podsEvicted map[string]bool
 }
 
 // ensure it implements the required interface
@@ -138,6 +140,7 @@ func NewManager(
 		dedicatedImageFs:              nil,
 		thresholdNotifiers:            []ThresholdNotifier{},
 		localStorageCapacityIsolation: localStorageCapacityIsolation,
+		podsEvicted:                   map[string]bool{},
 	}
 	return manager, manager
 }
@@ -337,6 +340,7 @@ func (m *managerImpl) synchronize(diskInfoProvider DiskInfoProvider, podFunc Act
 
 	if len(thresholds) == 0 {
 		klog.V(3).InfoS("Eviction manager: no resources are starved")
+		m.podsEvicted = map[string]bool{}
 		return nil
 	}
 
@@ -388,6 +392,12 @@ func (m *managerImpl) synchronize(diskInfoProvider DiskInfoProvider, podFunc Act
 	// we kill at most a single pod during each eviction interval
 	for i := range activePods {
 		pod := activePods[i]
+		podAndNamespace := pod.Namespace + "/" + pod.Name
+		if _, ok := m.podsEvicted[podAndNamespace]; ok {
+			klog.Warningf("Eviction manager: not evicting pod that we already attempted to evict: %v", podAndNamespace)
+			continue
+		}
+		m.podsEvicted[podAndNamespace] = true
 		gracePeriodOverride := int64(urgentEvictionGracePeriodSeconds)
 		if !isHardEvictionThreshold(thresholdToReclaim) {
 			gracePeriodOverride = m.config.MaxPodGracePeriodSeconds
